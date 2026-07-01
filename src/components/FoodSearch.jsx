@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   searchFoods,
   lookupBarcode,
@@ -7,11 +7,15 @@ import {
 } from '../lib/nutrition'
 import { fmt, MEAL_LABELS, MEAL_TYPES } from '../lib/format'
 import { netCarbs } from '../lib/calculations'
+import { toGrams, availableUnits, UNITS, isApproxConversion } from '../lib/units'
+import { listCustomFoods, customToFood } from '../lib/customFoods'
+import { useAuth } from '../context/AuthContext'
 
-// Three ways to add a food: text search (USDA + OFF), barcode (OFF), or a
-// manual entry that is clearly flagged as user-entered.
+// Ways to add a food: saved custom foods, text search (USDA + OFF), barcode
+// (OFF), or a one-off manual entry. Manual and custom are flagged user-entered.
 const MODES = [
   { id: 'search', label: 'Search' },
+  { id: 'saved', label: 'Saved' },
   { id: 'barcode', label: 'Barcode' },
   { id: 'manual', label: 'Manual' },
 ]
@@ -40,6 +44,9 @@ export default function FoodSearch({ defaultMeal = 'breakfast', onAdd }) {
       {mode === 'search' && (
         <SearchMode defaultMeal={defaultMeal} onAdd={onAdd} />
       )}
+      {mode === 'saved' && (
+        <SavedMode defaultMeal={defaultMeal} onAdd={onAdd} />
+      )}
       {mode === 'barcode' && (
         <BarcodeMode defaultMeal={defaultMeal} onAdd={onAdd} />
       )}
@@ -58,6 +65,7 @@ function SourceBadge({ source }) {
     usda: { label: 'USDA', cls: 'bg-blue-100 text-blue-700' },
     openfoodfacts: { label: 'Open Food Facts', cls: 'bg-amber-100 text-amber-700' },
     manual: { label: 'Manual', cls: 'bg-slate-200 text-slate-600' },
+    custom: { label: 'Saved', cls: 'bg-keto-100 text-keto-800' },
   }
   const s = map[source] || map.manual
   return (
@@ -68,25 +76,38 @@ function SourceBadge({ source }) {
 }
 
 // ---------------------------------------------------------------------------
-// Shared: once a food is selected, choose a portion (grams) + meal and add it.
-// Shows a live preview of the scaled macros before adding.
+// Shared: once a food is selected, choose an amount + unit + meal and add it.
+// The amount/unit is converted to grams and every nutrient is scaled from the
+// food's per-100g values. Shows a live preview before adding.
 // ---------------------------------------------------------------------------
 function PortionForm({ food, defaultMeal, onAdd, onCancel }) {
-  const [grams, setGrams] = useState(food.servingSize || 100)
+  // Default to "1 serving" when we know a serving weight, else "100 g".
+  const [amount, setAmount] = useState(food.servingSize ? 1 : 100)
+  const [unit, setUnit] = useState(food.servingSize ? 'serving' : 'g')
   const [meal, setMeal] = useState(defaultMeal)
 
-  const scaled = scaleToPortion(food, grams)
+  const units = availableUnits(food)
+  const grams = toGrams(amount, unit, {
+    density: food.density ?? 1,
+    serving_g: food.servingSize,
+  })
+  const approx = isApproxConversion(unit, food.density)
+  const gramsValid = grams != null && grams > 0
+
+  // All nutrients are scaled from the resolved grams — no guessing.
+  const scaled = gramsValid ? scaleToPortion(food, grams) : null
   const incomplete = hasIncompleteData(food)
 
   const handleAdd = () => {
-    if (!grams || grams <= 0) return
+    if (!gramsValid) return
     onAdd({
       meal_type: meal,
       food_name: food.brand ? `${food.name} (${food.brand})` : food.name,
       source: food.source,
-      quantity_g: Number(grams),
+      quantity_g: Math.round(grams * 10) / 10,
       ...scaled,
-      is_manual_entry: food.source === 'manual',
+      // Custom (saved) and manual foods use user-entered nutrition data.
+      is_manual_entry: food.source === 'manual' || food.source === 'custom',
     })
   }
 
@@ -109,23 +130,33 @@ function PortionForm({ food, defaultMeal, onAdd, onCancel }) {
         </p>
       )}
 
-      <div className="flex items-end gap-2">
-        <div className="flex-1">
-          <label className="label">Amount (grams)</label>
+      <div className="grid grid-cols-3 gap-2">
+        <div>
+          <label className="label">Amount</label>
           <input
             type="number"
-            min="1"
-            value={grams}
-            onChange={(e) => setGrams(e.target.value)}
+            min="0"
+            step="any"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
             className="input"
           />
-          {food.servingLabel && (
-            <p className="text-xs text-slate-400 mt-1">
-              Serving: {food.servingLabel}
-            </p>
-          )}
         </div>
-        <div className="flex-1">
+        <div>
+          <label className="label">Unit</label>
+          <select
+            value={unit}
+            onChange={(e) => setUnit(e.target.value)}
+            className="input"
+          >
+            {units.map((u) => (
+              <option key={u} value={u}>
+                {UNITS[u].label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
           <label className="label">Meal</label>
           <select
             value={meal}
@@ -141,16 +172,31 @@ function PortionForm({ food, defaultMeal, onAdd, onCancel }) {
         </div>
       </div>
 
+      {/* Resolved grams + honesty note about approximate volume conversions */}
+      <p className="text-xs text-slate-400">
+        {gramsValid ? `= ${fmt(grams, 1)} g` : 'Enter a valid amount'}
+        {food.servingLabel && ` · serving: ${food.servingLabel}`}
+        {approx && gramsValid && (
+          <span className="text-amber-600">
+            {' '}· ≈ approx (volume assumes water density)
+          </span>
+        )}
+      </p>
+
       {/* Live preview of scaled nutrients for this exact portion */}
       <div className="grid grid-cols-4 gap-2 text-center text-xs">
-        <Preview label="Cal" value={scaled.calories} />
-        <Preview label="Protein" value={scaled.protein} unit="g" />
-        <Preview label="Fat" value={scaled.fat} unit="g" />
-        <Preview label="Net carbs" value={scaled.net_carbs} unit="g" highlight />
+        <Preview label="Cal" value={scaled?.calories ?? 0} />
+        <Preview label="Protein" value={scaled?.protein ?? 0} unit="g" />
+        <Preview label="Fat" value={scaled?.fat ?? 0} unit="g" />
+        <Preview label="Net carbs" value={scaled?.net_carbs ?? 0} unit="g" highlight />
       </div>
 
       <div className="flex gap-2">
-        <button onClick={handleAdd} className="btn-primary flex-1">
+        <button
+          onClick={handleAdd}
+          disabled={!gramsValid}
+          className="btn-primary flex-1"
+        >
           Add to log
         </button>
         <button onClick={onCancel} className="btn-secondary">
@@ -268,6 +314,94 @@ function SearchMode({ defaultMeal, onAdd }) {
             </p>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Saved mode — pick from the user's own saved custom foods and log any amount.
+// ---------------------------------------------------------------------------
+function SavedMode({ defaultMeal, onAdd }) {
+  const { user } = useAuth()
+  const [foods, setFoods] = useState([])
+  const [filter, setFilter] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [selected, setSelected] = useState(null)
+
+  useEffect(() => {
+    let active = true
+    listCustomFoods(user.id)
+      .then((rows) => active && setFoods(rows.map(customToFood)))
+      .catch((e) => active && setError(e.message))
+      .finally(() => active && setLoading(false))
+    return () => {
+      active = false
+    }
+  }, [user.id])
+
+  const visible = foods.filter((f) =>
+    `${f.name} ${f.brand || ''}`.toLowerCase().includes(filter.toLowerCase())
+  )
+
+  if (loading) return <p className="text-sm text-slate-400">Loading saved foods…</p>
+  if (error) return <p className="text-sm text-red-600">{error}</p>
+
+  return (
+    <div className="space-y-3">
+      {foods.length === 0 ? (
+        <p className="text-sm text-slate-500">
+          No saved foods yet. Create reusable products on the{' '}
+          <a href="/foods" className="text-keto-700 underline font-medium">
+            My Foods
+          </a>{' '}
+          page.
+        </p>
+      ) : (
+        <>
+          <input
+            type="text"
+            placeholder="Filter your saved foods…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="input"
+          />
+          {selected ? (
+            <PortionForm
+              food={selected}
+              defaultMeal={defaultMeal}
+              onAdd={(log) => {
+                onAdd(log)
+                setSelected(null)
+              }}
+              onCancel={() => setSelected(null)}
+            />
+          ) : (
+            <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+              {visible.map((food) => (
+                <button
+                  key={food.id}
+                  onClick={() => setSelected(food)}
+                  className="w-full text-left py-2 px-1 hover:bg-slate-50 flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm text-slate-800 truncate">
+                      {food.name}
+                    </div>
+                    <div className="text-xs text-slate-400 truncate">
+                      {food.brand ? `${food.brand} · ` : ''}
+                      {fmt(food.per100g.calories, 0)} cal ·{' '}
+                      {fmt(netCarbs(food.per100g.total_carbs, food.per100g.fiber), 1)}g
+                      net carbs / 100g
+                    </div>
+                  </div>
+                  <SourceBadge source="custom" />
+                </button>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

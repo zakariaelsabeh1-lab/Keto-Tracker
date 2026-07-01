@@ -35,6 +35,12 @@ Net carbs and remaining calories are shown prominently on the daily view.
   the remaining calories.
 - Daily logging by date and meal (breakfast/lunch/dinner/snack) with combined,
   de-duplicated, source-labelled search results.
+- **Portion units**: log by grams, oz, lb, ml, tsp, tbsp or cup. Weight units
+  and known servings are exact; volume units are converted (assuming water
+  density unless a food defines its own) and clearly marked "≈ approx".
+- **Saved custom foods ("My Foods")**: enter a product's nutrition once and
+  reuse it. Set an optional serving weight and density so servings and
+  tsp/tbsp/cup convert exactly for your own products.
 - Edit quantity or remove logged items (nutrients re-scale automatically).
 - Weight tracking with a line chart over time.
 - Barcode/UPC lookup via Open Food Facts (manual number entry).
@@ -70,10 +76,14 @@ Open Food Facts needs no key.
 
 ### 3. Set up the database
 
-In your Supabase project open **SQL Editor** and run the contents of
-[`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql). This
-creates the `profiles`, `food_logs`, and `weight_logs` tables and enables Row
-Level Security keyed to `auth.uid()`.
+In your Supabase project open **SQL Editor** and run the migrations in order:
+
+1. [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql) —
+   creates `profiles`, `food_logs`, `weight_logs` with Row Level Security keyed
+   to `auth.uid()`.
+2. [`supabase/migrations/0002_custom_foods.sql`](supabase/migrations/0002_custom_foods.sql)
+   — adds the `custom_foods` table (saved "My Foods" library) and allows
+   `custom` as a food log source.
 
 > **Auth tip:** for quick local testing you can disable email confirmation in
 > Supabase → Authentication → Providers → Email. With it on, new sign-ups must

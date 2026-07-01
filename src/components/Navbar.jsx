@@ -25,6 +25,9 @@ export default function Navbar() {
           <NavLink to="/" className={linkClass} end>
             Today
           </NavLink>
+          <NavLink to="/foods" className={linkClass}>
+            My Foods
+          </NavLink>
           <NavLink to="/weight" className={linkClass}>
             Weight
           </NavLink>

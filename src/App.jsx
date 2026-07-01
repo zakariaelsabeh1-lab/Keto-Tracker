@@ -7,6 +7,7 @@ import Signup from './pages/Signup'
 import Dashboard from './pages/Dashboard'
 import Profile from './pages/Profile'
 import Weight from './pages/Weight'
+import MyFoods from './pages/MyFoods'
 import { isSupabaseConfigured } from './lib/supabase'
 
 export default function App() {
@@ -80,6 +81,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Weight />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/foods"
+          element={
+            <ProtectedRoute>
+              <MyFoods />
             </ProtectedRoute>
           }
         />
